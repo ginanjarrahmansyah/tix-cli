@@ -2,14 +2,23 @@ package gcpls
 
 import (
 	"context"
-	"fmt"
 	"log"
+	"os"
 	"sync"
 
 	"cloud.google.com/go/compute/metadata"
 	"github.com/spf13/cobra"
 	"google.golang.org/api/compute/v1"
+
+	"github.com/olekukonko/tablewriter"
 )
+
+type Instance struct {
+	Zone      string
+	Instance  string
+	PrivateIP string
+	PublicIP  string
+}
 
 var (
 	projectID string
@@ -52,7 +61,10 @@ func runGCPLS(cmd *cobra.Command, args []string) {
 		log.Fatal("Failed to list zones:", err)
 	}
 
-	instanceChan := make(chan string)
+	table := tablewriter.NewWriter(os.Stdout)
+	table.SetHeader([]string{"Zone", "Instance", "Private IP", "Public IP"})
+
+	instanceChan := make(chan *Instance)
 	doneChan := make(chan bool)
 
 	// launch Goroutines to fetch instances from each zone
@@ -65,7 +77,25 @@ func runGCPLS(cmd *cobra.Command, args []string) {
 			}
 
 			for _, instance := range instances.Items {
-				fmt.Printf("Zone: %s, Instance: %s\n", zone, instance.Name)
+				var privateIP, publicIP string
+
+				for _, iface := range instance.NetworkInterfaces {
+					if iface.NetworkIP != "" {
+						privateIP = iface.NetworkIP
+					}
+
+					if iface.AccessConfigs != nil && len(iface.AccessConfigs) > 0 {
+						publicIP = iface.AccessConfigs[0].NatIP
+					}
+				}
+
+				instanceInfo := &Instance{
+					Zone:      zone,
+					Instance:  instance.Name,
+					PrivateIP: privateIP,
+					PublicIP:  publicIP,
+				}
+				instanceChan <- instanceInfo
 			}
 
 			doneChan <- true
@@ -90,6 +120,8 @@ func runGCPLS(cmd *cobra.Command, args []string) {
 
 	// Process the received instance information concurrently
 	for instance := range instanceChan {
-		fmt.Println(instance)
+		table.Append([]string{instance.Zone, instance.Instance, instance.PrivateIP, instance.PublicIP})
 	}
+
+	table.Render()
 }
